@@ -1,0 +1,8 @@
+#!/bin/bash -p
+# Create a new branch on parent and corresponding branches on all
+# submodules, branching from the same branch as the parent
+#
+git update &&
+  git submodule foreach -q --recursive 'git update' &&
+  git branch -a && 
+  git status

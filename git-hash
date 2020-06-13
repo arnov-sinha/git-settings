@@ -1,0 +1,7 @@
+#!/bin/bash -p
+if [ "$1" != "" ] ; then
+    hashlength=$1
+else
+    hashlength=9
+fi
+git log -1 --format='%H' | cut -c-$hashlength

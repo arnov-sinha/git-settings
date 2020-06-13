@@ -1,0 +1,217 @@
+#!/bin/bash -p
+# Save output of command if TEELOG is not set to False
+: ${TEELOG:="sealab_key.log"}
+case "$TEELOG" in sealab_key.log) exec 1> >(tee $TEELOG) 2>&1 ;; esac
+
+DEFAULT_gitUSER=git
+DEFAULT_gitROOT=sealab
+DEFAULT_gitHOST=172.40.40.24
+DEFAULT_gitADMIN=cpritchard@ididata.com
+cmdname=$(basename $0)
+usage () {
+   cat 1>&2 <<EOF
+    $cmdname \\
+	-u <gituser> \\
+	-r <gitroot> \\
+	-H <githost> \\
+	-a <gitadmin.email@ididata.com>
+
+    The -h option returns 'help', what you're reading now.
+
+    This command creates an ssh keypair in $HOME/.ssh and modifies your
+    $HOME/.ssh/config file to enable use of git://<gitroot>.
+
+    If no -[urHa] options are entered, defaults are
+
+    <gituser>   =  $DEFAULT_gitUSER
+    <gitroot>   =  $DEFAULT_gitROOT
+    <githost>   =  $DEFAULT_gitHOST
+    <gitadmin>  =  $DEFAULT_gitADMIN
+EOF
+   exit $1
+}
+
+# Parse dash arguments:
+OPTIND=1
+while getopts ":a:H:r:u:h" option "$@" ; do
+   case "$option" in
+      u)  gituser=$OPTARG  ;;
+      r)  gitroot=$OPTARG ;;
+      H)  githost=$OPTARG  ;;
+      a)  gitadmin=$OPTARG ;;
+      h)  usage 0          ;;
+      \?) usage 1          ;;
+   esac
+done
+shift $((OPTIND-1))
+# Default user:
+: ${gituser:=$DEFAULT_gitUSER}
+
+cd $HOME
+umask 077
+printf "\n\tBefore continuing, let's see if you have the right tools installed.\n"
+for tool in git ssh-keygen ; do
+   printf "\n\tTesting to see if $tool is in your path ... "
+   type $tool 1>/dev/null 2>&1 || {
+      printf "\n\t$tool not found!"
+      exit 1
+   }
+done
+printf "\n"
+
+export flast
+while true ; do
+   printf "\n\tEnter your name as 'flast', in lower case,"
+   printf "\n\t(that is, first initial + last name),"
+   printf "\n\tas you would see it in your ididata.com email address."
+   printf "\n\tDo NOT append '@ididata.com'!"
+   printf "\n\t==> "
+   read flast
+   flast=${flast%@ididata.com}
+   printf "\n\tYou entered \'$flast\'.  Is this correct? [y/N]: "
+   read response
+   case "x$response" in x[Yy]*) break ;; esac
+   printf "\n\tOkay, let's try again.\n"
+done
+printf "\n\tflast stable email style name set to $flast\n"
+
+# Default settings:
+: ${gitroot:=$DEFAULT_gitROOT}
+: ${githost:=$DEFAULT_gitHOST}
+: ${gitadmin:=$DEFAULT_gitADMIN}
+
+export FullName
+while true ; do
+   printf "\n\tEnter your Full Name, as you prefer to be called."
+   printf "\n\tMiddle initial not necessary unless you want it in code changes."
+   printf "\n\t==> "
+   read FullName
+   printf "\n\tYou entered \'${FullName}\'.  Is this correct? [y/N]: "
+   read response
+   case "x$response" in x[Yy]*) break ;; esac
+   printf "\n\tOkay, let's try again.\n"
+done
+printf "\n\tName set to $flast\n"
+
+keybase=${flast}_${gitroot}
+
+printf "\n\tEnsuring correct permissions for \$HOME and \$HOME/.ssh:\n"
+chmod go-w $HOME
+mkdir -p $HOME/.ssh
+chmod -R go-rwx $HOME/.ssh
+cd $HOME/.ssh
+
+stanza="\
+Host ${gitroot}* gitlab* 172.40.40.24* precise64*\n\
+   User\t\t\t\t\t\t${gituser}\n\
+   Hostname\t\t\t\t\t${githost}\n\
+   Protocol\t\t\t\t\t2\n\
+   IdentityFile\t\t\t\t~/.ssh/$keybase\n\
+   ServerAliveInterval\t\t30\n\
+   StrictHostKeyChecking\tno\n\n"
+
+printf "\n\
+\tThe following stanza will be prepended to \$HOME/.ssh/config:\n\
+\t[Don't worry about funny tabs, they will look better later.]\n\n"
+
+printf ",-----\n"
+printf "$stanza" | sed -e "s/^/| /"
+printf "\`-----\n"
+
+printf "\n\tContinue? [Y/n]: "
+
+read response
+
+case "x$response" in x[Nn]*) exit 3 ;; esac
+
+printf "$stanza" > config.$gitroot
+
+cat > prepend_config_stanza.$keybase <<EOF
+#!/bin/bash -p
+printf "\n\tSetting up your ~/.ssh/config file for easy git access:\n"
+umask 077
+builtin cd
+chmod go-w .
+mkdir -p .ssh
+chmod -R go-rwx .ssh
+builtin cd .ssh
+if [[ -e config.$gitroot ]] ; then
+   /bin/mv -f config config.orig
+   cat config.$gitroot config.orig > config
+   printf "\n\tYour original ssh config file is saved as \\\$HOME/.ssh/config.orig.\n"
+   printf "\n\tYou made these changes, with new lines prefixed by '+':\n"
+   diff -u config.orig config
+   echo
+   printf "\n\tRunning git config commands:"
+   set -x
+   git config --global user.email "${flast}@ididata.com"
+   git config --global user.name "${FullName}"
+   set +x
+else
+   printf "\n\t\\\$HOME/.ssh/config.$gitroot does not exist." 1>&2
+   printf "\n\tVerify that $keybase.tar or $keybase.zip has been copied correctly." 1>&2
+fi
+EOF
+
+chmod u+x prepend_config_stanza.$keybase
+./prepend_config_stanza.$keybase
+
+printf "\n\tYour new \"Host ${gitroot}*\" config stanza has also been saved in"
+printf "\n\t\t\$HOME/.ssh/config.$gitroot\n"
+printf "\n\tCreating passphrase-less ssh key for git access ..."
+ssh-keygen \
+   -b 4096 \
+   -t rsa \
+   -C ${flast}@ididata.com \
+   -f $HOME/.ssh/$keybase \
+   -N '' -q
+
+printf "\n\t... finished ssh-keygen.\n\
+\n\tCreating tar and zipfile of config stanza and keypair.\n\n"
+
+tar -cvf $keybase.tar config.$gitroot $keybase $keybase.pub prepend_config_stanza.$keybase
+
+zip $keybase.zip config.$gitroot $keybase $keybase.pub prepend_config_stanza.$keybase
+
+printf "\n\tumask 022; cp $HOME/.ssh/${keybase}.pub $HOME; chmod g+rX $HOME"
+umask 022; cp $HOME/.ssh/${keybase}.pub $HOME ; chmod a+r $HOME/${keybase}.pub
+chmod g+rX $HOME
+
+docstring="\n\
+\tWhen you get your GitLab account, sign in and then add your gitlab\n\
+\tpublic key on the following page:\n\
+\t\thttp://${githost}/profile/keys\n\n\
+\tClick on 'Add SSH Key'.  Give it a helpful title like the hostname\n\
+\tyou usually work on to indicate you are adding a new credential\n\
+\tfrom there.\n\n\
+\tThen you have to paste in your public key, which is located in\n\
+\t\t~/.ssh/${keybase}.pub\n\n\
+\tFor me, it is most helpful to open the public key in a wrap-around-aware\n\
+\teditor such as vi or nedit.  If you are using terminal mode vi, hold the\n\
+\tshift key down while marking and copying your ~/.ssh/${keybase}.pub\n\
+\tfile.  Then paste into the GitLab key textarea.  Save and go back to the\n\
+\tGitLab dashboard.\n\n\
+\tThen check ~/.ssh/config to see if the added stanza makes sense.\n\n\
+\tTo use the same git key pair on other networks,\n\n\
+\t\tssh remoteuser@remotehost \\ \n\
+\t\t  \"umask 077; mkdir -p .ssh\"\n\
+\t\tscp -p \$HOME/.ssh/$keybase.tar \\ \n\
+\t\t  remoteuser@remotehost:.ssh\n\
+\t\tssh remoteuser@remotehost \\ \n\
+\t\t  \"cd .ssh; tar -xvf $keybase.tar; ./prepend_config_stanza.$keybase\"\n\
+"
+
+printf "$docstring"
+
+ps="\n\
+\t     For your convenience, these online instructions have been\n\
+\t     copied into the file $TEELOG in case you need to review them later.\n\
+\t\n\
+\t     These git commands have also been run.\n\
+\t     If they are incorrect, please modify.\n\
+\t\n\
+\t       git config --global user.email \"$flast@ididata.com\"\n\
+\t       git config --global user.name \"${FullName}\"\n\
+"
+
+printf "$ps"

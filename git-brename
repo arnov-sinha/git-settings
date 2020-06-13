@@ -1,0 +1,23 @@
+#!/bin/bash -p
+#
+# Put together the usual steps for getting a local checkout of a previously
+# existing remote branch
+#
+if (( $# != 1 )) ; then
+    cat 1>&2 <<EOF
+Usage:  git brename <new branch name>
+
+Branch rename, locally and remote.
+Create new remote branch name as copy of current remote branch, and set
+local branch to follow upstream changes on new remote branch name.
+Change local branch name to new branch name.
+Delete remote branch name.
+EOF
+    exit 1
+fi
+
+newname=$1
+branch=$(git symbolic-ref --short HEAD)
+git push -u origin ${branch}:${newname} &&
+    git branch -m ${branch} ${newname} &&
+    git push origin --delete ${branch}

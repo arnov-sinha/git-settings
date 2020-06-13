@@ -1,0 +1,93 @@
+#!/bin/bash -p
+# Collect and save interesting information when a
+# searchengine or queryengine fails.
+#
+# This simple scheme creates a "crash directory" and places files
+# in it which contain system information ($SYSINFONAME, $DMESGNAME, $SYSLOGNAME)
+# and the contents of the queryengine and searchengine directories which
+# are presumed to contain all executables, logs, output, and configuration
+# files used by all occurances of queryengines and searchengines running on
+# the machine.  The collected material is put into a tar-ball and copied
+# Signals are not explicitly caught and no clean up is performed
+#   if the script fails or is interrupted.
+# The script should be run as a user with sufficient permissions to
+#   read the required files and write the save area.  Additionally,
+#   the file /var/log/syslog is sometimes not readable by mere users
+#   so it might be necessary to 'sudo' the command that looks at this file.
+
+AEDIR="/home/ubuntu/addressengine"
+QEDIR="/home/ubuntu/queryengine"
+SEDIR="/home/ubuntu/searchengine"
+
+SYSINFONAME="sysinfo.out"
+DMESGNAME="dmesg.out"
+SYSLOGNAME="syslog.out"
+
+AWSPATH="/usr/local/bin"
+S3AREA="s3://cogint-node-data/craig-data"
+
+# Avoid colons in the file name -- tar doesn't like those.
+TMPAREA="/home/ubuntu/crashdir.`/bin/date +'%F_%H%M%S'`"
+
+date
+echo
+
+/bin/mkdir -p "$TMPAREA"
+
+TMPPARENT=$(dirname "$TMPAREA")
+
+cd $TMPPARENT
+
+/bin/rm -rf "$TMPAREA/$SYSINFONAME"
+/bin/date >> "$TMPAREA/$SYSINFONAME"
+/bin/cat /etc/os-release >> "$TMPAREA/$SYSINFONAME"
+/bin/uname -a >> "$TMPAREA/$SYSINFONAME"
+/bin/hostname >> "$TMPAREA/$SYSINFONAME"
+/usr/bin/uptime >> "$TMPAREA/$SYSINFONAME"
+/sbin/ifconfig >> "$TMPAREA/$SYSINFONAME"
+/usr/bin/free -m >> "$TMPAREA/$SYSINFONAME"
+/bin/grep '^processor' /proc/cpuinfo >> "$TMPAREA/$SYSINFONAME"
+/bin/df -k >> "$TMPAREA/$SYSINFONAME"
+/bin/ps wwwaux >> "$TMPAREA/$SYSINFONAME"
+
+/bin/dmesg > "$TMPAREA/$DMESGNAME"
+/usr/bin/tail -1000 /var/log/syslog > "$TMPAREA/$SYSLOGNAME"
+
+for THISDIR in "$QEDIR" "$SEDIR" "$AEDIR"; do
+    if [ -r "$THISDIR" ] ; then
+        printf "\n\tCopying $THISDIR to $TMPAREA (excluding .git subdirectory):\n"
+
+        # Go to parent of directory
+        cd $(dirname "$THISDIR")
+
+        # capture all the files in the directory, except the .git subdirectory,
+        # because that's basically an entire git repo.
+        /usr/bin/find $(basename "$THISDIR") -type f | \
+            egrep -v '/\.git/' | \
+            xargs /bin/tar -chf - | \
+            /bin/tar -C "$TMPAREA" -xvf -
+        cd "$TMPPARENT"
+    fi
+done
+
+TMPBASE="$(basename $TMPAREA)"
+TARNAME="$TMPBASE.tar.gz"
+
+printf "\n\tArchiving $TMPAREA into $TARNAME:\n"
+if ! /bin/tar -zcvf "$TARNAME" "$TMPBASE" ; then
+    echo "Tar failed -- check $TARNAME and $TMPBASE"
+    exit 1
+fi
+
+printf "\n\tUploading $TARNAME to $S3AREA:\n"
+if ! "$AWSPATH/aws" s3 cp "$TARNAME" "${S3AREA}/${TMPBASE}.tar.gz" ; then
+    echo "aws failed -- check $TARNAME and $TMPBASE"
+    exit 2
+fi
+
+printf "\n\tCleaning up $TARNAME and $TMPAREA:\n"
+/bin/rm -rf "$TMPAREA" "TARNAME"
+
+echo
+date
+echo "($0 completed successfully)"

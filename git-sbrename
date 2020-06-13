@@ -1,0 +1,30 @@
+#!/bin/bash -p
+# Create a new branch on parent and corresponding branches on all
+# submodules, branching from the same branch as the parent
+#
+if (( $# != 1 )) ; then
+    cat 1>&2 <<EOF
+Usage:  git sbrename <new branch name>
+
+Branch rename, locally and remote, recursing down submodules.
+
+See git-brename.
+EOF
+    exit 1
+fi
+
+newname=$1
+branch=$(git symbolic-ref --short HEAD)
+submodules=( $(git config -f .gitmodules -l | cut -f2 -d. | sort -u) )
+
+git submodule foreach --recursive "git brename $newname" &&
+    git brename $newname &&
+    for sub in ${submodules[*]} ; do \
+        git config -f .gitmodules submodule.${sub}.branch $newname ; \
+    done &&
+    git add .gitmodules ${submodules[*]} &&
+    git commit -m "Change name from $branch to $newname on parent and submodules" &&
+    git push -u origin $newname&&
+    git submodule sync --recursive &&
+    git submodule update --init --recursive &&
+    git submodule foreach --recursive 'git pull'

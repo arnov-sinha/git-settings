@@ -1,0 +1,6 @@
+#!/bin/bash -p
+submodules=( $(git config -f .gitmodules -l | cut -f2 -d. | sort -u) )
+delbranch=$1
+
+git delbr $delbranch &&
+    for sub in ${submodules[*]} ; do cd $sub && git delbr $delbranch && cd ..; done

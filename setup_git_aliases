@@ -1,0 +1,19 @@
+#!/bin/bash -p
+git config --global status.submoduleSummary true
+git config --global alias.add-modified '!git ls-files --modified | xargs git add'
+git config --global alias.bname 'symbolic-ref --short HEAD'
+git config --global alias.br branch
+git config --global alias.ci commit
+git config --global alias.cleanup '!git remote prune origin && git gc && git clean -dfx && git stash clear'
+git config --global alias.showdirty 'clean -ndfx'
+git config --global alias.co checkout
+git config --global alias.sco '!git scheckout'
+git config --global alias.lg "log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%C(bold blue)<%an>%Creset' --abbrev-commit"
+git config --global alias.rpull 'pull --rebase=preserve'
+git config --global alias.spush 'push --recurse-submodules=on-demand'
+git config --global alias.st status
+git config --global alias.stat status
+git config --global alias.sup '!git branch --set-upstream-to=origin/`git bname`'
+git config --global alias.show-aliases 'config --global --get-regexp alias'
+git config --global alias.xxdiff 'difftool --tool=xxdiff -y'
+git config --global alias.txtlg "log --graph --pretty='%h - %d %s (%cr) <%an>' --abbrev-commit"

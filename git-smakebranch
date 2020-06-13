@@ -1,0 +1,29 @@
+#!/bin/bash -p
+# Create a new branch on parent and corresponding branches on all
+# submodules, branching from the same branch as the parent
+#
+submodules=( $(git config -f .gitmodules -l | cut -f2 -d. | sort -u) )
+
+branch=$(git symbolic-ref --short HEAD)
+
+newbranch=$1
+
+git checkout -b $newbranch &&
+    for sub in ${submodules[*]} ; do \
+        cd $sub &&
+            git checkout $branch &&
+            git checkout -b $newbranch &&
+            git push -u origin $newbranch &&
+            cd .. &&
+            git config -f .gitmodules submodule.${sub}.branch $newbranch ; \
+    done &&
+    git add .gitmodules ${submodules[*]} &&
+    git commit \
+        -m "Create new branch ${newbranch} on submodules ${submodules[*]}" &&
+    git push -u origin $newbranch &&
+  git submodule sync --recursive &&
+  git submodule update --init --recursive &&
+  git submodule foreach -q --recursive \
+      'git checkout \
+        $(git config -f $toplevel/.gitmodules submodule.$name.branch || echo master)' &&
+  git submodule foreach --recursive 'git pull'

@@ -1,0 +1,4 @@
+#!/bin/bash -p
+git branch-alias "$@" &&
+  git submodule foreach --recursive "git branch-alias $@" &&
+  git submodule foreach --recursive 'git pull'

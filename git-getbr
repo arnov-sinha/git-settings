@@ -1,0 +1,48 @@
+#!/bin/bash -p
+#
+# Put together the usual steps for getting a local checkout of a previously
+# existing remote branch
+#
+branch=$(git symbolic-ref --short HEAD)
+
+printf "\n(Running 'git pull' on branch \'$branch\')\n\n" 1>&2
+
+if git pull ; then
+    printf "\n('git pull' completed successfully)\n" 1>&2
+else
+    printf "\nError in 'git pull'\n" 1>&2
+    exit 1
+fi
+
+if [ "$branch" != "master" ] ; then
+    # Switch to master branch and do git pull again
+    printf "\n(Switching to master branch, \'git checkout master')\n\n" 1>&2
+    if git checkout master ; then
+        printf "\n('git checkout master' completed successfully)\n" 1>&2
+    else
+        printf "\nError in 'git checkout master'\n" 1>&2
+        exit 2
+    fi
+
+    printf "\n(Running 'git pull' on master branch)\n\n" 1>&2
+
+    if git pull ; then
+        printf "\n('git pull' completed successfully)\n" 1>&2
+    else
+        printf "\nError in 'git pull'\n" 1>&2
+        exit 3
+    fi
+fi
+
+printf "\n(Running \'git checkout -t origin/$1 -b $1\')\n\n" 1>&2
+
+if git checkout -t origin/$1 -b $1 ; then
+    printf "\n(\'git checkout -t origin/$1 -b $1\' completed successfully)\n" 1>&2
+else
+    printf "\nError in \'git checkout -t origin/$1 -b $1\'\n" 1>&2
+    exit 2
+fi
+
+printf "\n(Local and remote branch listing, 'git branch -a')\n\n" 1>&2
+
+git branch -a

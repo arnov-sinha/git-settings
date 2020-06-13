@@ -1,0 +1,7 @@
+#!/bin/bash -p
+git getbr "$@" &&
+  git submodule foreach -q --recursive \
+      'git getbr \
+        $(git config -f $toplevel/.gitmodules submodule.$name.branch || echo master)' &&
+  git submodule sync --recursive &&
+  git submodule update --init --recursive

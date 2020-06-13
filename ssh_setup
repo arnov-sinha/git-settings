@@ -1,0 +1,832 @@
+#!/bin/bash -p
+#
+# Script to set up reciprocal SSH key-pairs between the
+# local system and a specified remote system.
+#
+# Simplify perms:  turn off group and other permissions by default:
+# Start at user home directory
+umask 077
+cd                              # default is to cd $HOME
+: ${HOME:=$PWD}                 # set $HOME to Posix standard $PWD if not set
+
+# Standardize path:
+#
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:$HOME/bin
+
+usage () {
+   docstring="\
+\n\t$(basename $0):  set up trusted SSH relationship between two hosts.\n\
+Usage:\n\
+\t$(basename $0) \\ \n\
+\t\t\t[-t <type>] \\ \n\
+\t\t\t[-b <bits>] \\ \n\
+\t\t\t[-L <local_host>] \\ \n\
+\t\t\t[-u <remote_user>] \\ \n\
+\t\t\t[-v] [-h]  <remote_host>\n\
+\n\
+\tOption arguments:\n\n\
+\t-t <type>   Type of key to use, options are rsa and dsa.\n\
+\t            NB:  stonehenge always uses a dsa key with 1024 bits\n\
+\n\
+\t-b <bits>   Number of bits in auth key (1024 for dsa, 2048 or 4096 for rsa)\n\
+\n\
+\t-L <local_host>\n\
+\t            Specify full local hostname with domain if remote host doesn't \n\
+\t            recognize local hostname specifier\n\
+\n\
+\t-u <remote_user>\n\
+\t            User id on remote host\n\
+\t            Alternatively, you can use <remote_user>@<remote_host> as\n\
+\t            the last argument.\n\
+\n\
+\t-v          Turn on verbose mode\n\
+\n\
+\t-h          Help (show usage and exit)\n\
+\n\
+\tRequired argument:\n\n\
+\t<remote_host>\n\
+\t            Name of remote host with which you're setting up the connection.\n\
+\t            <remote_user>@<remote_host> syntax allowed; overrides -u arg.\n\n\
+For more info, see\n\
+\thttp://aerowiki.ca.boeing.com/RandomWiki/HowTo/SetupSshWithoutPasswords\n"
+   printf "$docstring" 1>&2
+   exit $1
+}
+unset KEYBITS KEYTYPE REMOTE_USER VERBOSE
+
+# Parse optional arguments
+while getopts ":b:t:u:hv" option ; do
+   echo "option = $option"
+   case "$option" in
+      b) KEYBITS=$OPTARG ;;
+      t) KEYTYPE=$OPTARG ;;
+      u) REMOTE_USER=$OPTARG ;;
+      L) LOCAL_HOST=$OPTARG ;;
+      v) VERBOSE=verbose ;;
+      \?|*)
+         printf "\n\t*** $(basename $0): option $option not handled\n"
+         usage 1 ;;
+      h) usage 0 ;;
+   esac
+done
+shift $((OPTIND-1))
+
+# Default settings:
+: ${KEYTYPE:=rsa}
+: ${KEYBITS:=4096}
+: ${VERBOSE:=""}
+: ${MAINTAINER:="Ted Stern <lgtedstern@gmail.com>"}
+
+# Set defaults for local and remote keys:
+: ${LOCAL_KEYTYPE:=${KEYTYPE}}
+: ${LOCAL_KEYBITS:=${KEYBITS}}
+: ${REMOTE_KEYTYPE:=${LOCAL_KEYTYPE}}
+: ${REMOTE_KEYBITS:=${LOCAL_KEYBITS}}
+
+# Required argument parsing:
+(( $# == 1 )) || usage 1
+
+LOCAL_USER="`whoami`"
+REMOTE_HOST="$1"
+
+# user@host syntax overrides -u argument
+case "$REMOTE_HOST" in
+   *@*)
+      REMOTE_USER=${REMOTE_HOST%@*}
+      REMOTE_HOST=${REMOTE_HOST#*@}
+      ;;
+esac
+
+# We assume remote user, if set, is different than the local user.
+# If it is the same, unset it.
+[[ "x$REMOTE_USER" != "x${LOCAL_USER}" ]] || unset REMOTE_USER
+
+if [[ "x$REMOTE_USER" != "x" ]] ; then
+   REMOTE_USER_STR="-l $REMOTE_USER"
+   LOCAL_USER_STR="-l $LOCAL_USER"
+else
+   REMOTE_USER_STR=""
+   REMOTE_USER="$LOCAL_USER"
+   LOCAL_USER_STR=""
+fi
+
+# If local host not set on commandline, try to figure out full name:
+if [[ "x$LOCAL_HOST" = "x" ]] ; then
+   LOCAL_HOST="`hostname`"
+   #case "$LOCAL_HOST" in
+   #   *.*)  true ;;
+   #   *)    LOCAL_HOST="${LOCALHOST}.`dnsdomainname`" ;;
+   #esac
+fi
+
+LOCAL_SSH_COMMAND="ssh"
+LOCAL_KEYGEN_ARGS="-t $LOCAL_KEYTYPE -b $LOCAL_KEYBITS -q"
+LOCAL_PRIVATE=id_${LOCAL_KEYTYPE}
+LOCAL_PUBLIC=${LOCAL_PRIVATE}.pub
+LOCAL_PRIVATE_COPY="${LOCAL_PRIVATE}_${LOCAL_USER}@${LOCAL_HOST}"
+LOCAL_PUBLIC_COPY="${LOCAL_PRIVATE_COPY}.pub"
+
+LOCAL_SCP_COMMAND=$(echo $LOCAL_SSH_COMMAND | sed -e 's/ssh$/scp/')
+
+# Standard query:
+continue_or_quit () {
+   printf "\n\tRET or 'c' to continue;\n\tControl-c or 'q' to quit: [c/Q] ==> "
+   read response
+   case "x$response" in x[Qq]*) exit 1 ;; esac
+   echo
+}
+
+# alias issue_message=echo
+issue_message() {
+awk 'BEGIN {
+header="############################################################################"
+headr2="#                                                                          #"
+print header;
+print headr2;
+}
+END	{
+print headr2;
+print header;
+}
+	{
+	printf "# %-72.72s #\n",substr($0,index($0,$1));
+	}' <<EOF
+$1
+EOF
+}
+
+#-----------------------------------------------------------------------
+# Okay, here's where the normal stuff starts:
+#-----------------------------------------------------------------------
+issue_message "Creating a trusted ssh relationship between
+$LOCAL_HOST and $REMOTE_HOST
+
+During this process, you may see messages of the form:
+
+Warning: Permanently added 'xxxx,11.11.11.11' (RSA) to the list of known hosts.
+
+Which is normal.
+
+You may see several login banners, which is also normal.
+
+You will also be prompted once for your $REMOTE_HOST
+password during this process.
+
+This is normal and unavoidable."
+continue_or_quit
+
+# Remove group/other permissions on home directory:
+chmod go-w $HOME
+
+# Check permissions on home directory
+
+group_write=`ls -ld . | awk '{print substr($1,6,1)}'`
+other_write=`ls -ld . | awk '{print substr($1,9,1)}'`
+
+if test "$group_write" != "-" -o "$other_write" != "-" ; then
+   issue_message "\
+ Your local home directory has write permission for group or other.
+ This is a potentially exploitable security hole.
+
+ Please change permissions to no greater than 755 on your home
+ directory.
+
+ Use symbolic chmod notation to remove group and other write
+ permissions with the following command:
+
+	chmod go-w $HOME"
+   exit 1
+fi
+
+#
+# Ensure local .ssh directory has correct permissions:
+#
+if [[ -d .ssh ]] ; then
+ # Check permissions on .ssh directory
+   group_perms=`ls -ld .ssh | awk '{print substr($1,5,3)}'`
+   other_perms=`ls -ld .ssh | awk '{print substr($1,8,3)}'`
+   if test "$group_perms" != "---" -o "$other_perms" != "---"  ; then
+      issue_message "\
+ Your local .ssh directory has access enabled for group or other.
+ This is a security hole.  Changing permissions to 700 on your
+ .ssh directory."
+      chmod -R go-rwx .ssh
+   fi
+else
+ # Create a .ssh directory with the proper permissions
+   if [[ "x$VERBOSE" != "x" ]] ; then
+      issue_message "\
+Creating local .ssh directory."
+      continue_or_quit
+   fi
+   mkdir .ssh
+fi
+chmod 700 .ssh
+
+if test -f .ssh/${LOCAL_PUBLIC} -a -f .ssh/${LOCAL_PRIVATE} ; then
+   if [[ "x$VERBOSE" != "x" ]] ; then
+      issue_message "${LOCAL_PRIVATE} key-pair already exists
+
+  Using existing key-pair"
+   fi
+else
+   if test -f .ssh/${LOCAL_PUBLIC} -o -f .ssh/${LOCAL_PRIVATE} ; then
+      issue_message "Only one component of ${LOCAL_KEYTYPE} key-pair exists
+
+  I am going to move the existing file to a backup location and regenerate
+  your key.  If you are okay with this, hit return to continue, otherwise
+  hit Ctrl-C to end now."
+      continue_or_quit
+      for base in $LOCAL_PRIVATE $LOCAL_PUBLIC ; do
+         file=$HOME/.ssh/$base
+         test -f $file && {
+            echo "Only $file exists, not the other half of the pair."
+            /bin/mv -f $file ${file}.back
+            echo "Moved $file to ${file}.back}"
+         }
+      done
+   fi
+ # Create an SSH ${LOCAL_KEYTYPE} key-pair
+   issue_message "\
+Creating local ssh $LOCAL_KEYTYPE key-pair.
+This may take several minutes to complete."
+   continue_or_quit
+
+   ${LOCAL_SSH_COMMAND}-keygen ${LOCAL_KEYGEN_ARGS} \
+      -f .ssh/${LOCAL_PRIVATE} -N '' -C "${LOCAL_USER}@${LOCAL_HOST}"
+
+fi
+#
+# Make backup copies of local keypair
+#
+make_backup () {
+   if [[ ! -f $2 ]] ; then
+      /bin/cp -p $1 $2
+   else
+      if ! cmp -s $1 $2 ; then
+         issue message "\
+While attempting to make a backup copy of $1,
+we found an existing $2 which differs bitwise from $1.
+
+If you overwrite it and continue, you will lose that backup info.
+
+Otherwise, you can halt now and have a chance to fix things before
+trying again."
+
+         printf "\tOverwrite $2 with $1 and continue?  [y/N] ==> "
+         read response
+         case "x$response" in
+            x[Yy]*) /bin/cp -p $1 $2 ;;
+            *)     exit 1           ;;
+         esac
+      fi
+   fi
+}
+
+make_backup .ssh/$LOCAL_PRIVATE .ssh/$LOCAL_PRIVATE_COPY
+make_backup .ssh/$LOCAL_PUBLIC  .ssh/$LOCAL_PUBLIC_COPY
+
+#
+# Ensure new $LOCAL_KEYTYPE key is in local authorized_keys file:
+#
+cd .ssh
+touch authorized_keys
+cat $LOCAL_PUBLIC authorized_keys | sort -u > authorized_keys.new
+/bin/mv -f authorized_keys authorized_keys.back
+/bin/mv -f authorized_keys.new authorized_keys
+if [[ ! -s authorized_keys.back ]] ; then
+   /bin/rm -f authorized_keys.back
+fi
+cd ..
+
+# Make sure permissions on files in local .ssh directory
+# are OK
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "\
+Ensuring that no files in the local .ssh directory
+have write permission for group or other..."
+   continue_or_quit
+fi
+touch .ssh/known_hosts
+chmod go-rx .ssh/*
+
+# Put the temporary remote host stanza at the TOP of the config file.
+cd .ssh
+cat > config.${REMOTE_HOST}_stanza <<EOF
+Host $REMOTE_HOST
+   StrictHostKeyChecking	no
+
+EOF
+touch config
+/bin/mv -f config config.pre_ssh_setup
+cat config.${REMOTE_HOST}_stanza config.pre_ssh_setup > config
+cd ..
+
+# At this point, a local key-pair has been created
+   issue_message "\
+All done with local key setup on $LOCAL_HOST
+
+  Connecting to $REMOTE_HOST to set up ssh access"
+
+# Ensure that a .ssh directory exists on the remote system
+# Append the key-pair to the authorized_keys on the remote system
+# Force correct permissions in .ssh on the remote system
+
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "\
+Adding the public key for $LOCAL_HOST to $REMOTE_HOST list of authorized keys.
+
+When prompted for password, enter password for $REMOTEUSER@$REMOTE_HOST"
+   continue_or_quit
+fi
+
+# This is a bit of multitasking:
+#
+# Set up the remote copy of the $LOCAL_PUBLIC_COPY in a composite command:
+#  a) fix permissions on the remote home directory
+#  b) make the .ssh directory with correct perms if not there already
+#  c) save the local public key into a remote version of
+#     ${LOCAL_PUBLIC_COPY}
+#  d) Append that copy to the remote .ssh/authorized_keys file
+$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+chmod go-w .; \
+test -d .ssh && chmod -R u+rwX,go-rwx .ssh || mkdir .ssh; \
+cat > .ssh/${LOCAL_PUBLIC_COPY}; \
+cat .ssh/${LOCAL_PUBLIC_COPY} >> .ssh/authorized_keys; \
+touch .ssh/known_hosts" < .ssh/${LOCAL_PUBLIC}
+
+
+# Just in case something doesn't work, create a default host stanza
+# for the config file to use later on.  In the event that the user
+# ends the script early, at least they can use this stanza in
+# their config file as a template.
+#
+# The actual place this gets used is at the "*** SUCCESS!!! ***" stage
+# below.
+#
+cat > .ssh/config.default_host_stanza <<EOF
+Host *
+   LogLevel		        	QUIET
+   ProxyCommand	        	none
+   Protocol			        2
+   StrictHostKeyChecking	no
+EOF
+
+printf "\n\n\t*** NB: ***\n\
+\tRandomWiki's HowTo/SetupSshWithoutPasswords page recommends\n\
+\tadding the following default stanza at the end of your \n\
+\t~/.ssh/config file.\n\
+\n\
+\t\tHost *\n\
+\t\t   Protocol                2\n\
+\t\t   StrictHostKeyChecking   no\n\
+\n\
+\n\
+\tFor your convenience, I've saved this stanza as\n\
+\n\t\t~/.ssh/config.default_host_stanza\n\n
+\ton both the local and remote hosts.\n\n\
+\tIf you modify ~/.ssh/config, ensure it has correct permissions\n\
+\tafter editing or you may find that your pass-phrase-less access\n\
+\twill no longer work:\n\
+\n\
+\t\tchmod 600 ~/.ssh/config\n\n\tHit RET to continue\n" > \
+   .ssh/README.default_host_stanza
+
+#-----------------------------------------------------------------------
+# OK, now no more passwords should be needed...
+#-----------------------------------------------------------------------
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "\
+NOTICE - you should not be prompted for passwords again in this
+script. If you are, there was a failure to properly install your
+public key in the .ssh/authorized_keys file on ${REMOTE_HOST}."
+   continue_or_quit
+fi
+
+# Now set up the remote key.  The first step is to figure out the name
+# of the remote host, as it sees itself:
+#
+# [Use ksh $() syntax to run a command, insted of backquotes (e.g., `<cmd>`)]
+REMOTE_HOSTNAME=$($LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST 'hostname')
+
+printf "\n\
+\t*** The output of 'hostname' on $REMOTE_HOST is \"$REMOTE_HOSTNAME\" ***\n\n"
+continue_or_quit
+
+REMOTE_SSH_COMMAND="ssh"
+
+# Set up remote file names:
+REMOTE_PRIVATE=id_${REMOTE_KEYTYPE}
+REMOTE_PUBLIC=${REMOTE_PRIVATE}.pub
+REMOTE_PRIVATE_COPY="${REMOTE_PRIVATE}_${REMOTE_USER}@${REMOTE_HOSTNAME}"
+REMOTE_PUBLIC_COPY="${REMOTE_PRIVATE_COPY}.pub"
+REMOTE_KEYGEN_ARGS="-t $REMOTE_KEYTYPE -b $REMOTE_KEYBITS -q"
+
+REMOTE_KEY_EXISTS=`$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+test -f .ssh/${REMOTE_PUBLIC} && echo yes || echo no"`
+
+if [[ "$REMOTE_KEY_EXISTS" = "yes" ]] ; then
+   issue_message "\
+ Public key already exists on $REMOTE_HOST - Using that key file"
+   continue_or_quit
+else
+   issue_message "\
+Creating ssh ${REMOTE_KEYTYPE} keypair on ${REMOTE_HOST}.
+This may take several minutes to complete."
+   continue_or_quit
+   # In remote command, issue echoes before and after key generation
+   # to keep user informated about progress
+   $LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+echo 'Starting remote keypair generation ...' ; \
+${REMOTE_SSH_COMMAND}-keygen \
+${REMOTE_KEYGEN_ARGS} \
+-f .ssh/${REMOTE_PRIVATE} \
+-N '' \
+-C ${REMOTE_USER}@${REMOTE_HOST} ; \
+echo '... remote keypair generation completed.'" || {
+      issue_message "\
+ERROR:
+Remote keypair generation seems to have had some sort of problem!
+Do you really want to keep going?  You might want to check things
+out in both local and remote .ssh directories and start over."
+      continue_or_quit
+   }
+fi
+
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "Appending public key from $REMOTE_HOST to local authorized_keys file"
+   continue_or_quit
+fi
+
+# Combining several remote calls into one:
+#
+# a) Make backup copy of keypair on remote host
+# b) Ensure remote host's authorized_keys file has its own
+#    ${REMOTE_PUBLIC} key installed
+# c) Copy the remote's ${REMOTE_PUBLIC} key into a local
+#    ${REMOTE_PUBLIC_COPY}.
+#
+$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+cd .ssh; \
+/bin/cp -pf ${REMOTE_PRIVATE} ${REMOTE_PRIVATE_COPY}; \
+/bin/cp -pf ${REMOTE_PUBLIC}  ${REMOTE_PUBLIC_COPY}; \
+touch authorized_keys; \
+cat ${REMOTE_PUBLIC} authorized_keys | sort -u > authorized_keys.new; \
+/bin/mv -f authorized_keys     authorized_keys.back ; \
+/bin/mv -f authorized_keys.new authorized_keys; \
+/bin/rm -f authorized_keys.back; \
+cat ${REMOTE_PUBLIC}" > .ssh/${REMOTE_PUBLIC_COPY}
+
+# Put the remote's public copy into the local authorized_keys file, and
+# sort that file
+cd .ssh
+/bin/mv -f authorized_keys authorized_keys.temp
+cat ${REMOTE_PUBLIC_COPY} authorized_keys.temp | sort -u > authorized_keys
+/bin/rm -f authorized_keys.temp
+cd ..
+
+# Get local host added to remote's list of known hosts.
+# The awkward part of this is that we have to issue an ssh call to the
+# remote host that connects back to the local host via ssh!
+
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "Add lines to $REMOTE_HOST .ssh/config file"
+   continue_or_quit
+fi
+
+#-----------------------------------------------------------------------
+# We don't want to have an interactive prompt to add the local host's
+# hostkey to the known_hosts file, so we temporarily modify the remote
+# host's config file so that the local host's hostkey isn't being
+# checked.  ***New*** Change from Jim Glidewell's old method does not
+# require checking how many lines are in the config file first.
+# -----------------------------------------------------------------------
+cd .ssh
+cat > config.${LOCAL_HOST}_stanza <<EOF
+Host $LOCAL_HOST
+   StrictHostKeyChecking	no
+
+EOF
+$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+cd .ssh; \
+cat > config.${LOCAL_HOST}_stanza; \
+touch config; \
+/bin/mv -f config config.pre_ssh_setup; \
+cat  config.${LOCAL_HOST}_stanza config.pre_ssh_setup > config" \
+   < config.${LOCAL_HOST}_stanza
+cd ..
+#-----------------------------------------------------------------------
+
+# Try to ssh to remote host, then ssh back to the local host
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "\
+Adding local host's key to remote_host's known_hosts file,
+by trying to ssh to remote host and then ssh back to local host."
+   continue_or_quit
+fi
+
+TMP_HOST=`$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "$REMOTE_SSH_COMMAND $LOCAL_USER_STR $LOCAL_HOST hostname"`
+
+if [[ "x$TMP_HOST" = "x$LOCAL_HOST" ]] ; then
+
+   # *** SUCCESS!!! ***
+
+   # Copy the default host stanza (created above) to the remote host:
+   $LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; cat > .ssh/config.default_host_stanza" \
+      < .ssh/config.default_host_stanza
+
+   # Congratulations message.
+   issue_message "\
+ Congratulations! ssh and scp communications have been successfully
+ established between
+        $LOCAL_HOST
+ and
+        $REMOTE_HOST.
+
+ Hit RET to continue."
+
+   error=0
+
+else
+
+   issue_message "\
+ Failed to ssh back to $LOCAL_HOST from $REMOTE_HOST
+ Please retry setup, then contact ${MAINTAINER} for help.
+
+ Hit RET to continue"
+
+   error=1
+fi
+
+read junk
+
+# Extra info about default host stanza (created above)
+echo "------------------------------------------------------------------"
+echo "Contents of $HOME/.ssh/README.default_host_stanza:"
+echo "------------------------------------------------------------------"
+cat .ssh/README.default_host_stanza
+echo "------------------------------------------------------------------"
+echo "(All that info can be found in ~/.ssh/README.default_host_stanza)"
+echo "------------------------------------------------------------------"
+
+#-----------------------------------------------------------------------
+# CLEANUP:
+#-----------------------------------------------------------------------
+# New mode is easier than Jim Glidewell's old hack -- just restore
+# config.pre_ssh_setup
+#-----------------------------------------------------------------------
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "Remove extra lines in local .ssh/config"
+   continue_or_quit
+fi
+
+cd .ssh
+/bin/rm -f config
+if [[ -s config.pre_ssh_setup ]] ; then
+   /bin/mv -f config.pre_ssh_setup config
+else
+   /bin/rm -f config.pre_ssh_setup
+fi
+/bin/rm -f config.${REMOTE_HOST}_stanza
+cd ..
+
+if [[ "x$VERBOSE" != "x" ]] ; then
+   issue_message "Remove temporary extra lines in remote .ssh/config"
+   continue_or_quit
+fi
+
+# Remove extra lines in remote .ssh/config
+$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+cd .ssh; \
+/bin/rm -f config ; \
+test -s config.pre_ssh_setup && \
+   /bin/mv -f config.pre_ssh_setup config || \
+   /bin/rm -f config.pre_ssh_setup; \
+/bin/rm -f config.${LOCAL_HOST}_stanza"
+#
+# Also remove local copy of remote host's LOCAL_HOST stanza
+/bin/rm -f config.${LOCAL_HOST}_stanza
+
+# if there was an error, exit now.  Otherwise, we can continue with the
+# Trust Propagation step.
+if (( error == 1 )) ; then exit 1 ; fi
+
+#-----------------------------------------------------------------------
+# New stuff:
+#-----------------------------------------------------------------------
+# Offer to copy config.default_host_stanza to config if there isn't
+# anything there now
+
+if [[ ! -f .ssh/config ]] ; then
+   printf "\n\
+\t********************************************************************\n\
+\tYou don't have a $HOME/.ssh/config file locally on $LOCAL_HOST.\n\
+\t********************************************************************\n\
+\t***** Installing default host stanza in $LOCAL_HOST:.ssh/config *****\n"
+   /bin/cp -pf .ssh/config.default_host_stanza .ssh/config
+   printf "\n\
+\t********************************************************************\n"
+fi
+
+REMOTE_CONFIG_EXISTS=`$LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+test -f .ssh/config && echo yes || echo no"`
+
+if [[ "$REMOTE_CONFIG_EXISTS" = "no" ]] ; then
+   printf "\n\
+\t********************************************************************\n\
+\tYou don't have a $REMOTE_HOST:.ssh/config file set up.\n\
+\t********************************************************************\n\
+\t***** Installing default host stanza in $REMOTE_HOST:.ssh/config *****\n"
+   $LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; cd .ssh; /bin/cp -pf config.default_host_stanza config"
+   printf "\n\
+\t********************************************************************\n"
+fi
+
+#-----------------------------------------------------------------------
+# Use the authorized_keys file to figure out what other hosts we're
+# connected to, and offer to extend the circle of trust with current
+# $REMOTE_USER@$REMOTE_HOST to those other hosts.
+#-----------------------------------------------------------------------
+# Do all subsequent stuff in the .ssh directory:
+cd .ssh
+TMPDIR=.ssh_setup.$$
+mkdir $TMPDIR
+
+OTHER_REMOTE_KEYFILE=$TMPDIR/other_remotehost_keys
+
+# Create a copy of the authorized_keys file containing hosts other
+# than the LOCAL_HOST and REMOTE_HOST we're currently working with.
+egrep '^ssh-(dss|rsa) [^ ]+ .*@' authorized_keys | \
+   cat - id_?sa_*.pub | \
+   sort -u | \
+   fgrep -v -f ${LOCAL_PUBLIC} -f ${REMOTE_PUBLIC_COPY} \
+   > $OTHER_REMOTE_KEYFILE
+
+# Check whether there were any hosts listed!
+if [[ -s $OTHER_REMOTE_KEYFILE ]] ; then
+   # Yes, there were ... Check whether the user actually wants
+   # to proceed:
+   printf "\n\
+\tYou have granted trusted access to your account from these hosts:\n\
+\n
+\t\tKEYTYPE  REMOTEUSER@REMOTEHOST\n"
+   cut -f1,3 -d' ' < $OTHER_REMOTE_KEYFILE | \
+      sed -e 's/ssh-dss/DSA/' -e 's/ssh-rsa/RSA/' | \
+      xargs printf "\t\t%s      %s\n"
+
+   printf "\n\n\
+\tIf you have reciprocal trust with any of these accounts, you now have\n\
+\tthe option of extending your trusted relationship with \n\
+\t${REMOTE_USER}@${REMOTE_HOST} to some or all of them.  If you choose\n\
+\tto continue, you will have the option to skip connections individually.\n\
+\tWould you like to continue?\n\n\
+\tEnter YES to continue, anything else to quit now. ==> "
+   read response
+   echo
+   case "x$response" in
+      x[Yy]*) true ;;
+      *) /bin/rm -rf $TMPDIR; exit 0 ;;
+   esac
+else
+   # No, there weren't.  Print a message and exit.
+   /bin/rm -rf $TMPDIR
+   printf "\n\
+\t********************************************************************\n\
+\tIt looks like you don't have any other trusted relationships at the\n\
+\tmoment, so we're done with ssh setup for now.  Before running this\n\
+\tscript again, check your ~/.ssh/config both locally and remotely to\n\
+\tverify that everything is okay, and add a default 'Host *' stanza\n\
+\tboth locally and remotely if desired.\n\
+\tSee ~/.ssh/config.default_host_stanza for an example.\n\
+\t********************************************************************\n\
+\a\a\a\a\a\n"
+   exit 0
+fi
+
+# Okay, we're proceeding.  The 'exec 9<' and 'while read -u9' combo is
+# a hack to keep the while loop in the current shell, while still
+# allowing reading responses from stdin.  This works in Korn shell and
+# Bash.
+exec 9< $OTHER_REMOTE_KEYFILE
+while read -u9 keytype_code publickey comment ; do
+
+   case "$keytype_code" in
+      ssh-dss) keytype=dsa ;;
+      ssh-rsa) keytype=rsa ;;
+   esac
+   remote_user=${comment%@*}
+   remote_host=${comment#*@}
+
+   remote_pubkey=id_${keytype}_${comment}.pub
+
+   printf "\n\tEstablish trusted relationship between\n\t$REMOTE_USER@$REMOTE_HOST and\n\t$remote_user@$remote_host?\n"
+   printf "\n\tEnter RET or 'y' to continue; 'n' to skip: [Y/n] ==> "
+   read response
+   echo
+   case "x$response" in x[Nn]*) continue ;; *) true ;; esac
+
+   if [[ "x$remote_user" != "x$LOCAL_USER" ]] ; then
+      remote_user_str="-l $remote_user"
+   else
+      remote_user_str=""
+   fi
+
+   printf \
+      "\n\tVerifying passphraseless-access to $remote_user@$remote_host ...\n"
+
+   # check whether we can even access the remote account:
+   $LOCAL_SSH_COMMAND $remote_user_str $remote_host 'hostname' || {
+      printf "\n\
+\t*** 'hostname' on $remote_user@$remote_host did not work.\n\
+\tSkipping.\n"
+      continue                  # jump to next loop iteration
+   }
+
+   # Continue ...
+   echo "$keytype_code $publickey $comment" > $TMPDIR/${remote_pubkey}
+
+   pubmatch=""
+   for file in id_${keytype}*.pub ; do
+      if cmp -s $file $TMPDIR/${remote_pubkey} ; then
+         pubmatch=$file
+         break
+      fi
+   done
+
+   case "x$pubmatch" in
+      x)
+                  # no backup copy found.  Make copy to ssh directory.
+         cp $TMPDIR/$remote_pubkey .
+         ;;
+      *)
+         remote_pubkey="$pubmatch"
+         ;;
+   esac
+   #
+   # Okay, extend the relationship:
+   #
+   if [[ "x$VERBOSE" != "x" ]] ; then
+      issue_message "\
+Granting access from
+$REMOTE_USER@$REMOTE_HOST
+to
+$remote_user@remote_host"
+      continue_or_quit
+   fi
+   $LOCAL_SSH_COMMAND $remote_user_str $remote_host "\
+umask 077; \
+chmod go-w .; \
+test -d .ssh && chmod -R go-rwx .ssh || mkdir .ssh; cd .ssh; \
+cat > ${REMOTE_PUBLIC_COPY}; \
+touch authorized_keys; \
+/bin/mv -f authorized_keys authorized_keys.back ; \
+cat ${REMOTE_PUBLIC_COPY} authorized_keys.back | \
+sort -u > authorized_keys" < ${REMOTE_PUBLIC_COPY} || {
+      issue_message "\
+ERROR:
+Something went wrong with copying $REMOTE_PUBLIC_COPY to
+$remote_user @ $remote_host"
+   }
+
+   # Now the other way around:
+   if [[ "x$VERBOSE" != "x" ]] ; then
+      issue_message "\
+Granting access from
+$remote_user@remote_host
+to
+$REMOTE_USER@$REMOTE_HOST"
+      continue_or_quit
+   fi
+   $LOCAL_SSH_COMMAND $REMOTE_USER_STR $REMOTE_HOST "\
+umask 077; \
+chmod go-w .; \
+test -d .ssh && chmod -R go-rwx .ssh || mkdir .ssh; cd .ssh; \
+cat > ${remote_pubkey}; \
+touch authorized_keys; \
+/bin/mv -f authorized_keys authorized_keys.back ; \
+cat ${remote_pubkey} authorized_keys.back | \
+sort -u > authorized_keys" < ${remote_pubkey}  || {
+      issue_message "\
+ERROR:
+Something went wrong with copying $remote_pubkey to
+$REMOTE_USER @ $REMOTE_HOST"
+   }
+
+   issue_message "\
+Trusted relationship established between
+$REMOTE_USER @ $REMOTE_HOST and
+$remote_user @ $remote_host .
+Try it out after this script completes."
+
+done
+
+# We're really done now.
+/bin/rm -rf $TMPDIR
+exit 0

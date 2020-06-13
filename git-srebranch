@@ -1,0 +1,6 @@
+#!/bin/bash -p
+sub=$1
+newbranch=$2
+echo "Putting submodule $sub on branch $newbranch:"
+
+git config -f .gitmodules submodule.${sub}.branch $newbranch

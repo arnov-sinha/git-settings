@@ -1,0 +1,22 @@
+#!/bin/bash -p
+#
+# update local clones of all remote branches on which local clone is behind
+#
+printf "Updating local clones of all remote branches on which we're behind:\n\n"
+git branch -vv | egrep ': behind [0-9]+\]'
+
+printf "\n(Checking out master branch in case current branch has been deleted)\n\n"
+
+git checkout master && \
+  git fetch --all --prune && \
+  (git branch -vv | egrep ': behind [0-9]+\]' 1>/dev/null 2>&1) && \
+  git branch -vv | \
+  awk '/: behind [0-9]+]/{print $1}' | \
+  xargs -n1 -i@ git fetch origin @:@ && \
+  git pull --tags && \
+  git pull && 
+  git gc
+
+echo ""
+
+git br -a

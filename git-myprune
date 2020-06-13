@@ -1,0 +1,21 @@
+#!/bin/bash -p
+#
+echo "Pruning remote branches and deleting local clones of those branches"
+
+tmp1=$(mktemp)
+git br -a > $tmp1
+
+git checkout master && \
+  git fetch --all --prune && \
+  (git branch -vv | fgrep ': gone]' 1>/dev/null 2>&1) && \
+  git branch -vv | \
+  awk '/: gone]/{print $1}' | \
+  xargs -n1 -i@ git branch -D @ && \
+  git gc
+
+tmp2=$(mktemp)
+git branch -a > $tmp2
+cmp $tmp1 $tmp2 && exit
+printf "\n(Diffs between old and new branch status)\n\n" 1>&2
+diff -u $tmp1 $tmp2
+/bin/rm $tmp1 $tmp2

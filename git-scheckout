@@ -1,0 +1,7 @@
+#!/bin/bash -p
+git checkout "$@" &&
+  git submodule foreach -q --recursive \
+      'git checkout \
+        $(git config -f $toplevel/.gitmodules submodule.$name.branch || echo master)' &&
+  git submodule sync --recursive &&
+  git submodule update --init --recursive
